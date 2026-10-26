@@ -23,32 +23,52 @@ class Scheduler:
         self.waiting.append(seq)
 
     def schedule(self) -> tuple[list[Sequence], bool]:
+        """
+            这里固定了 nano-vllm 调度策略：优先 prefill, 其次 decode。
+
+            初次添加的 seq 会被放到 waitting 序列中，因此 waiting 序列中都是等待 prefill的 seqs。
+            调度器每次先去取 waitting 中的 seq，一旦取到就直接返回，不会交叉 waiting 和 running。
+
+            对于 prefill 部分，会先计算缓存命中的块数，然后根据本轮调度的额度计算出可用的调度长度记录
+            到 seq 中，之后 seq 就可以根据缓存的长度和调度的长度去做切片进行计算。
+        """
+
         scheduled_seqs = []
-        num_batched_tokens = 0
+        num_accum_scheduled_tokens = 0
 
         # prefill
         while self.waiting and len(scheduled_seqs) < self.max_num_seqs:
             seq = self.waiting[0]
-            remaining = self.max_num_batched_tokens - num_batched_tokens
-            if remaining == 0:
+            token_budget = self.max_num_batched_tokens - num_accum_scheduled_tokens
+
+            if token_budget == 0:
                 break
-            if not seq.block_table:
-                num_cached_blocks = self.block_manager.can_allocate(seq)
-                if num_cached_blocks == -1:
+
+            first_time_prefill = not seq.block_table
+
+            if first_time_prefill:
+                num_cache_hit_blocks = self.block_manager.can_allocate(seq)
+                if num_cache_hit_blocks == -1:
                     break
-                num_tokens = seq.num_tokens - num_cached_blocks * self.block_size
+                num_cache_hit_tokens = num_cache_hit_blocks * self.block_size
+                num_pending_tokens = seq.num_tokens - num_cache_hit_tokens
             else:
-                num_tokens = seq.num_tokens - seq.num_cached_tokens
-            if remaining < num_tokens and scheduled_seqs:  # only allow chunked prefill for the first seq
+                num_pending_tokens = seq.num_tokens - seq.num_cached_tokens
+
+            first_scheduled_seq = not scheduled_seqs
+            if token_budget < num_pending_tokens and not first_scheduled_seq:  # only allow chunked prefill for the first seq
                 break
-            if not seq.block_table:
-                self.block_manager.allocate(seq, num_cached_blocks)
-            seq.num_scheduled_tokens = min(num_tokens, remaining)
-            num_batched_tokens += seq.num_scheduled_tokens
+            if first_time_prefill:
+                self.block_manager.allocate(seq, num_cache_hit_blocks)
+
+            seq.num_scheduled_tokens = min(num_pending_tokens, token_budget)
+            num_accum_scheduled_tokens += seq.num_scheduled_tokens
+
             if seq.num_cached_tokens + seq.num_scheduled_tokens == seq.num_tokens:
                 seq.status = SequenceStatus.RUNNING
                 self.waiting.popleft()
                 self.running.append(seq)
+
             scheduled_seqs.append(seq)
 
         if scheduled_seqs:
