@@ -56,21 +56,26 @@ class BlockManager:
         self.free_block_ids.append(block_id)
 
     def can_allocate(self, seq: Sequence) -> int:
+        """
+            -1    空闲块不足
+             0    可以分配，没有缓存命中
+             >0   缓存命中的块数(可能在 used 也可能在 free)
+        """
         h = -1
-        num_cached_blocks = 0
-        num_new_blocks = seq.num_blocks
+        num_cache_hit_blocks = 0
+        num_required_free_blocks = seq.num_blocks # 缓存命中的块可能在 free 也可能在 used
         for i in range(seq.num_blocks - 1):
             token_ids = seq.block(i)
             h = self.compute_hash(token_ids, h)
             block_id = self.hash_to_block_id.get(h, -1)
-            if block_id == -1 or self.blocks[block_id].token_ids != token_ids:
+            if block_id == -1 or self.blocks[block_id].token_ids != token_ids: 
                 break
-            num_cached_blocks += 1
+            num_cache_hit_blocks += 1
             if block_id in self.used_block_ids:
-                num_new_blocks -= 1
-        if len(self.free_block_ids) < num_new_blocks:
+                num_required_free_blocks -= 1
+        if len(self.free_block_ids) < num_required_free_blocks: 
             return -1
-        return num_cached_blocks
+        return num_cache_hit_blocks
 
     def allocate(self, seq: Sequence, num_cached_blocks: int):
         assert not seq.block_table
