@@ -134,7 +134,7 @@ class ModelRunner:
         max_seqlen_q = 0
         max_seqlen_k = 0
         slot_mapping = []
-        block_tables = None
+        batch_block_tables = None
         for seq in seqs:
             start = seq.num_cached_tokens
             seqlen_q = seq.num_scheduled_tokens
@@ -160,13 +160,13 @@ class ModelRunner:
                     slot_end = seq.block_table[i] * self.block_size + end - i * self.block_size
                 slot_mapping.extend(range(slot_start, slot_end))
         if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache
-            block_tables = self.prepare_block_tables(seqs)
+            batch_block_tables = self.prepare_block_tables(seqs)
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, None, block_tables)
+        set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, None, batch_block_tables)
         return input_ids, positions
 
     def prepare_decode(self, seqs: list[Sequence]):
